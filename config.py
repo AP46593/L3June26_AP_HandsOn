@@ -38,7 +38,7 @@ TEMPERATURE = 0.7
 # =============================================================================
 
 # Observability — set to True to enable Opik tracing (requires OPIK_API_KEY in .env)
-ENABLE_OPIK_TRACING = True
+ENABLE_OPIK_TRACING = False
 
 # Web Search — choose which search provider to use
 # Options: "tavily" (requires TAVILY_API_KEY in .env) or "duckduckgo" (free, no key)
