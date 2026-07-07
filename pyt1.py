@@ -4,13 +4,20 @@ Sends user prompts to local Ollama endpoint with configurable
 temperature and response length.
 """
 
-from langchain_ollama import ChatOllama
+import truststore
+truststore.inject_into_ssl()
 
-# --- Configuration ---
-MODEL = "gpt-oss:120b-cloud"
-MAX_TOKENS = 500          # Limit response length
-TEMPERATURE = 0.7         # Adjust creativity: 0.0 (deterministic) to 1.0+ (creative)
-OLLAMA_BASE_URL = "http://localhost:11434"
+from dotenv import load_dotenv
+load_dotenv()
+
+from langchain_ollama import ChatOllama
+from config import ORCHESTRATOR_MODEL, MAX_TOKENS, OLLAMA_BASE_URL
+
+# --- Local Configuration ---
+TEMPERATURE = 0.7  # Adjust creativity: 0.0 (deterministic) to 1.0+ (creative)
+
+# Model name without provider prefix for ChatOllama direct usage
+MODEL = ORCHESTRATOR_MODEL.removeprefix("ollama:")
 
 
 def chat(prompt: str, temperature: float = TEMPERATURE, max_tokens: int = MAX_TOKENS):

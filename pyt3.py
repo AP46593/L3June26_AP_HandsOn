@@ -10,19 +10,20 @@ truststore.inject_into_ssl()
 from dotenv import load_dotenv
 load_dotenv()
 
-from opik.integrations.langchain import OpikTracer
 from langchain_ollama import ChatOllama
 from langchain.agents import create_agent
-from tools.agent_tools import ask_weather_agent, ask_calc_agent, ask_stock_agent, ask_web_search_agent
+from config import ORCHESTRATOR_MODEL, MAX_TOKENS, OLLAMA_BASE_URL, ENABLE_OPIK_TRACING
+from tools.agent_tools import ask_weather_agent, ask_calc_agent, ask_stock_agent
+from agents.search_agent import run as search_run
 
-# --- Opik Tracer ---
-opik_tracer = OpikTracer()
+# --- Conditional Opik Tracing ---
+opik_tracer = None
+if ENABLE_OPIK_TRACING:
+    from opik.integrations.langchain import OpikTracer
+    opik_tracer = OpikTracer()
 
-# --- Configuration ---
-MODEL = "gpt-oss:120b-cloud"
-MAX_TOKENS = 500
+# --- Local Configuration ---
 TEMPERATURE = 0.7
-OLLAMA_BASE_URL = "http://localhost:11434"
 SYSTEM_MESSAGE = (
     "You are a helpful orchestrator assistant. "
     "You can answer general questions directly. "
@@ -33,6 +34,25 @@ SYSTEM_MESSAGE = (
     "For questions requiring current/live information, latest news, or recent events, delegate to the web search agent using the ask_web_search_agent tool. "
     "Keep your final responses concise, under 500 characters. No markdown formatting."
 )
+
+# Model name without provider prefix for ChatOllama direct usage
+MODEL = ORCHESTRATOR_MODEL.removeprefix("ollama:")
+
+
+# --- Web Search Tool (wraps search_agent) ---
+from langchain_core.tools import tool
+
+@tool
+def ask_web_search_agent(query: str) -> str:
+    """Delegate questions requiring live internet search to the web search specialist agent.
+    Use this when the user asks about current events, latest news, recent updates,
+    or any information that requires up-to-date internet search.
+    Pass the user's full question as the query.
+    """
+    print(f"\n  [Web Search Agent] Received: {query}")
+    result = search_run(query)
+    print(f"  [Web Search Agent] Returning: {result}")
+    return result
 
 
 # --- Orchestrator Agent Setup ---
@@ -62,9 +82,13 @@ def chat(user_input: str):
     # Add user message to history
     conversation_history.append({"role": "user", "content": user_input})
 
+    invoke_config = {}
+    if opik_tracer:
+        invoke_config["callbacks"] = [opik_tracer]
+
     result = orchestrator.invoke(
         {"messages": conversation_history},
-        config={"callbacks": [opik_tracer]}
+        config=invoke_config
     )
 
     # Find the last AI message with content (that's the final answer)

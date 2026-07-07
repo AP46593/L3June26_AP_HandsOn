@@ -10,38 +10,21 @@ truststore.inject_into_ssl()
 from dotenv import load_dotenv
 load_dotenv()
 
-from opik.integrations.langchain import OpikTracer
 from langchain_ollama import ChatOllama
 from langchain.agents import create_agent
 from langchain_core.tools import tool
-
-# Import existing agent tools
+from config import ORCHESTRATOR_MODEL, MAX_TOKENS, OLLAMA_BASE_URL, ENABLE_OPIK_TRACING
 from tools.agent_tools import ask_weather_agent, ask_calc_agent, ask_stock_agent
+from agents.search_agent import run as search_run
 
-# --- Opik Tracer ---
-opik_tracer = OpikTracer()
+# --- Conditional Opik Tracing ---
+opik_tracer = None
+if ENABLE_OPIK_TRACING:
+    from opik.integrations.langchain import OpikTracer
+    opik_tracer = OpikTracer()
 
-
-# --- Tavily Search Agent Tool ---
-@tool
-def ask_tavily_search_agent(query: str) -> str:
-    """Delegate questions requiring live internet search to the Tavily web search agent.
-    Use this when the user asks about current events, latest news, recent updates,
-    or any information that requires up-to-date internet search.
-    Pass the user's full question as the query.
-    """
-    from agents.tavily_search_agent import run as tavily_run
-    print(f"\n  [Tavily Search Agent] Received: {query}")
-    result = tavily_run(query)
-    print(f"  [Tavily Search Agent] Returning: {result}")
-    return result
-
-
-# --- Configuration ---
-MODEL = "gpt-oss:120b-cloud"
-MAX_TOKENS = 500
+# --- Local Configuration ---
 TEMPERATURE = 0.7
-OLLAMA_BASE_URL = "http://localhost:11434"
 SYSTEM_MESSAGE = (
     "You are a helpful orchestrator assistant. "
     "You can answer general questions directly. "
@@ -52,6 +35,23 @@ SYSTEM_MESSAGE = (
     "For questions requiring current/live information, latest news, or recent events, delegate to the Tavily search agent using the ask_tavily_search_agent tool. "
     "Keep your final responses concise, under 500 characters. No markdown formatting."
 )
+
+# Model name without provider prefix for ChatOllama direct usage
+MODEL = ORCHESTRATOR_MODEL.removeprefix("ollama:")
+
+
+# --- Tavily Search Tool (wraps search_agent) ---
+@tool
+def ask_tavily_search_agent(query: str) -> str:
+    """Delegate questions requiring live internet search to the Tavily web search agent.
+    Use this when the user asks about current events, latest news, recent updates,
+    or any information that requires up-to-date internet search.
+    Pass the user's full question as the query.
+    """
+    print(f"\n  [Tavily Search Agent] Received: {query}")
+    result = search_run(query)
+    print(f"  [Tavily Search Agent] Returning: {result}")
+    return result
 
 
 # --- Orchestrator Agent Setup ---
@@ -81,9 +81,13 @@ def chat(user_input: str):
     # Add user message to history
     conversation_history.append({"role": "user", "content": user_input})
 
+    invoke_config = {}
+    if opik_tracer:
+        invoke_config["callbacks"] = [opik_tracer]
+
     result = orchestrator.invoke(
         {"messages": conversation_history},
-        config={"callbacks": [opik_tracer]}
+        config=invoke_config
     )
 
     # Find the last AI message with content (that's the final answer)

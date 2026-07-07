@@ -42,7 +42,7 @@ ENABLE_OPIK_TRACING = False
 
 # Web Search — choose which search provider to use
 # Options: "tavily" (requires TAVILY_API_KEY in .env) or "duckduckgo" (free, no key)
-WEB_SEARCH_PROVIDER = "tavily"
+WEB_SEARCH_PROVIDER = "duckduckgo"
 
 # Session Logging — set to True to write Message/agentLog files to User-Chat/
 ENABLE_SESSION_LOGGING = True

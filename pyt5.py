@@ -31,15 +31,27 @@ if ENABLE_OPIK_TRACING:
 MODEL = ORCHESTRATOR_MODEL
 TEMPERATURE = 0.7
 SYSTEM_MESSAGE = (
-    "You are a helpful orchestrator assistant. "
-    "You can answer general questions directly. "
-    "When you need a specialist, respond with EXACTLY one of these routing keywords on a line by itself: "
-    "ROUTE:WEATHER - for weather questions about a city "
-    "ROUTE:CALC - for math calculations "
-    "ROUTE:STOCK - for stock prices or company share info "
-    "ROUTE:SEARCH - for current events, news, or live internet info "
-    "If you can answer directly without a specialist, just respond normally. "
-    "IMPORTANT: Only answer what the user asked. Keep responses under 500 characters. No markdown."
+    "You are a helpful orchestrator assistant. Today's date is 2026-07-07. The current year is 2026. "
+    "You have the following specialist capabilities: "
+    "1. Weather Agent - get current weather for any city "
+    "2. Calculator Agent - basic math (add, subtract, multiply, divide, square, cube, sqrt, cbrt) "
+    "3. Stock Price Agent - look up stock prices (currently supports Zensar Technologies and Apple) "
+    "4. Web Search Agent - search the internet for current events, news, and live information "
+    "You can also answer general knowledge questions directly. "
+    "When asked what you can do, mention all of the above capabilities. "
+    "ONLY use routing when the user explicitly asks about one of these topics: "
+    "- Weather in a specific city → respond with ROUTE:WEATHER on its own line "
+    "- Math calculation → respond with ROUTE:CALC on its own line "
+    "- Stock price of a company → respond with ROUTE:STOCK on its own line "
+    "- Current events, news, live internet search, OR any question about recent/last year's events → respond with ROUTE:SEARCH on its own line "
+    "IMPORTANT: Any question about events from 2024, 2025, or 2026 MUST be routed to ROUTE:SEARCH. "
+    "Do NOT answer time-sensitive questions from your own knowledge — always route to search. "
+    "When routing, include a clear rewritten query after the ROUTE keyword that resolves any pronouns. "
+    "Example: if user says 'How is he doing this season' and context shows 'he' = Lando Norris, "
+    "respond with: ROUTE:SEARCH Lando Norris 2026 F1 season performance "
+    "For ALL other questions (greetings, general knowledge, 'what can you do', etc.), "
+    "answer directly WITHOUT any ROUTE keyword. "
+    "Keep responses under 500 characters. No markdown."
 )
 
 
@@ -50,8 +62,9 @@ class AgentState(TypedDict):
 
 
 # --- LLM (no tools bound - routing is explicit) ---
-llm = init_chat_model(
-    MODEL,
+from langchain_ollama import ChatOllama
+llm = ChatOllama(
+    model="gpt-oss:120b-cloud",
     temperature=TEMPERATURE,
     num_predict=MAX_TOKENS,
     base_url=OLLAMA_BASE_URL
@@ -102,23 +115,32 @@ def stock_agent_node(state: AgentState) -> AgentState:
     return {"messages": [AIMessage(content=result)], "route": "done"}
 
 
-def tavily_search_node(state: AgentState) -> AgentState:
-    """Web search specialist - searches internet via Tavily."""
-    from agents.tavily_search_agent import run as tavily_run
+def web_search_node(state: AgentState) -> AgentState:
+    """Web search specialist - searches internet via configured provider."""
+    from agents.search_agent import run as search_run, PROVIDER_NAME
     query = _get_last_user_query(state)
-    print(f"\n  [Tavily Search Agent] Processing: {query}")
-    result = tavily_run(query)
-    print(f"  [Tavily Search Agent] Result: {result}")
+    print(f"\n  [Web Search Agent ({PROVIDER_NAME})] Processing: {query}")
+    result = search_run(query)
+    print(f"  [Web Search Agent ({PROVIDER_NAME})] Result: {result}")
     return {"messages": [AIMessage(content=result)], "route": "done"}
 
 
 def summarizer_node(state: AgentState) -> AgentState:
-    """Takes agent results and formulates a final user-friendly response."""
+    """Takes agent results and formulates a final user-friendly response.
+    Skips LLM call for short, already-clear answers.
+    """
     messages = state["messages"]
+    agent_response = messages[-1].content if messages else ""
+
+    # If the response is already short and clear, skip the LLM summarization
+    if len(agent_response) < 200:
+        return {"messages": [AIMessage(content=agent_response)], "route": ""}
+
+    # For longer responses, summarize
     prompt = (
         "Summarize the following information into a concise, helpful response "
         "for the user. Keep it under 500 characters. No markdown formatting.\n\n"
-        f"Information: {messages[-1].content}"
+        f"Information: {agent_response}"
     )
     response = llm.invoke([SystemMessage(content="You are a helpful assistant."),
                            HumanMessage(content=prompt)])
@@ -130,7 +152,23 @@ def summarizer_node(state: AgentState) -> AgentState:
 # =============================================================================
 
 def _get_last_user_query(state: AgentState) -> str:
-    """Extract the last user message from state."""
+    """Extract the query to pass to specialist agents.
+    First checks if the orchestrator included a rewritten query after ROUTE:keyword.
+    Falls back to the last human message.
+    """
+    # Check if orchestrator provided a rewritten query after ROUTE:
+    for msg in reversed(state["messages"]):
+        if msg.type == "ai" and msg.content:
+            content = msg.content.strip()
+            for prefix in ["ROUTE:WEATHER", "ROUTE:CALC", "ROUTE:STOCK", "ROUTE:SEARCH"]:
+                if prefix in content:
+                    # Extract everything after the ROUTE:keyword
+                    after_route = content.split(prefix, 1)[1].strip()
+                    if after_route:
+                        return after_route
+            break
+
+    # Fallback to last human message
     for msg in reversed(state["messages"]):
         if msg.type == "human":
             return msg.content
@@ -149,7 +187,7 @@ def route_from_orchestrator(state: AgentState) -> str:
     elif "ROUTE:STOCK" in content:
         return "stock_agent"
     elif "ROUTE:SEARCH" in content:
-        return "tavily_search"
+        return "web_search"
     else:
         return END  # Direct answer, no routing needed
 
@@ -170,7 +208,7 @@ graph.add_node("orchestrator", orchestrator_node)
 graph.add_node("weather_agent", weather_agent_node)
 graph.add_node("calc_agent", calc_agent_node)
 graph.add_node("stock_agent", stock_agent_node)
-graph.add_node("tavily_search", tavily_search_node)
+graph.add_node("web_search", web_search_node)
 graph.add_node("summarizer", summarizer_node)
 
 # Entry point
@@ -184,7 +222,7 @@ graph.add_conditional_edges(
         "weather_agent": "weather_agent",
         "calc_agent": "calc_agent",
         "stock_agent": "stock_agent",
-        "tavily_search": "tavily_search",
+        "web_search": "web_search",
         END: END
     }
 )
@@ -193,7 +231,7 @@ graph.add_conditional_edges(
 graph.add_edge("weather_agent", "summarizer")
 graph.add_edge("calc_agent", "summarizer")
 graph.add_edge("stock_agent", "summarizer")
-graph.add_edge("tavily_search", "summarizer")
+graph.add_edge("web_search", "summarizer")
 
 # Summarizer ends the flow
 graph.add_edge("summarizer", END)
@@ -318,7 +356,7 @@ if __name__ == "__main__":
 
     print("=== LangGraph Multi-Agent Orchestrator ===")
     print(f"Model: {MODEL} | Temperature: {TEMPERATURE}")
-    print("Nodes: orchestrator → weather_agent | calc_agent | stock_agent | tavily_search → summarizer")
+    print("Nodes: orchestrator → weather_agent | calc_agent | stock_agent | web_search → summarizer")
     print("Type 'quit' to exit.\n")
 
     while True:

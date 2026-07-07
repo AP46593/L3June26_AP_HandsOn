@@ -4,16 +4,27 @@ Uses create_agent from langchain with ChatOllama.
 Demonstrates basic tool-calling agent pattern.
 """
 
+import truststore
+truststore.inject_into_ssl()
+
+from dotenv import load_dotenv
+load_dotenv()
+
 from langchain_ollama import ChatOllama
 from langchain.agents import create_agent
 from tools import get_weather
+from config import ORCHESTRATOR_MODEL, MAX_TOKENS, OLLAMA_BASE_URL
 
-# --- Configuration ---
-MODEL = "gpt-oss:120b-cloud"
-MAX_TOKENS = 500
+# --- Local Configuration ---
 TEMPERATURE = 0.7
-OLLAMA_BASE_URL = "http://localhost:11434"
-SYSTEM_MESSAGE = "You are a helpful Assistant. When a user asks about weather and the tool returns that the location could not be found, tell them directly that the city was not recognized and ask them to provide a valid city name."
+SYSTEM_MESSAGE = (
+    "You are a helpful Assistant. When a user asks about weather and the tool "
+    "returns that the location could not be found, tell them directly that the "
+    "city was not recognized and ask them to provide a valid city name."
+)
+
+# Model name without provider prefix for ChatOllama direct usage
+MODEL = ORCHESTRATOR_MODEL.removeprefix("ollama:")
 
 
 # --- Agent Setup ---
